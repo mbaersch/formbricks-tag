@@ -5,6 +5,10 @@ This template is not provided or maintained by Formbricks.
 
 Loads the [Formbricks](https://formbricks.com) JS SDK and initializes it with your workspace ID. Optionally identifies users, sets attributes, language and hidden fields and tracks actions.
 
+![Template Status](https://img.shields.io/badge/Community%20Template%20Gallery%20Status-submitted-orange) ![Repo Size](https://img.shields.io/github/repo-size/mbaersch/formbricks-tag) ![License](https://img.shields.io/github/license/mbaersch/formbricks-tag)
+
+---
+
 This template replaces the Custom HTML snippet from the Formbricks setup instructions and can be used in containers without access to Custom HTML tags ([restricted tag types](https://developers.google.com/tag-platform/tag-manager/restrict)).
 
 ## Usage
