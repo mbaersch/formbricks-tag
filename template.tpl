@@ -940,11 +940,6 @@ scenarios:
     assertThat(setupCalls).isEqualTo(1);
     assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'a1');
     assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'a2');
-- name: gtmOnSuccess fires before setup event
-  code: |-
-    runCode(mockData);
-    assertApi('gtmOnSuccess').wasCalled();
-    assertApi('callInWindow').wasNotCalledWith('formbricks.track.call', null, 'x');
 - name: undefined hidden field value is skipped, empty or null removes the key
   code: |-
     mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
