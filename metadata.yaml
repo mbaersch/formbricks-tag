@@ -1,5 +1,5 @@
 homepage: "https://www.markus-baersch.de"
 documentation: "https://github.com/mbaersch/formbricks-tag#readme"
 versions:
-  - sha: f24c256d8323633904e04bd0e78995e7d1eb62a2
+  - sha: 759b65e70f029357cfcbadcf4700dc704c899696
     changeNotes: initial release.
