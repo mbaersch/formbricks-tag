@@ -18,22 +18,29 @@ Add the template to your container, create a new *Formbricks* tag, enter your wo
 https://app.formbricks.com/js/formbricks.umd.cjs
 ```
 
-After the script has loaded, `formbricks.setup()` is called with the workspace ID and the app URL. Setup runs only once per page, even if the tag fires multiple times. Every Formbricks tag needs the workspace ID, as any of them may be the first one to fire.
+After the script has loaded, `formbricks.setup()` is called with the workspace ID and the app URL. Setup runs only once per page, even if the tag fires multiple times. Every Formbricks tag needs the workspace ID, as any of them may be the first one to fire. Only the first tag's workspace ID and app URL are used, so one page can only use one Formbricks workspace.
+
+If Formbricks is already loaded when the first tag fires (for example by the snippet from the Formbricks setup instructions), the tag does not load or set it up a second time. It only runs the optional methods. It is still best to use either the snippet or this template, not both, as the snippet may finish loading after the tag has fired.
 
 ## Optional methods
 All options are executed after Formbricks has finished its setup (`formbricks_setup_successful`). A tag firing before that point waits for the event; a tag firing later runs them right away. This way, one tag can load Formbricks and send data at the same time, and additional tags on other triggers (e.g. a login or checkout event) can send more data later.
 
 The methods are called in this order, so a survey triggered by the tracked action already has all data:
 
-1. **Identify user** (Enterprise Edition): `setUserId()`, `setEmail()` and `setAttributes()`. If the user ID is empty at runtime, no user data is sent, as Formbricks drops email and attributes without a user ID. Empty email or attribute values are skipped. Identified users count towards your monthly tracked users.
+1. **Identify user** (Enterprise Edition): `setUserId()`, `setEmail()` and `setAttributes()`. If the user ID is empty at runtime, no user data is sent, as Formbricks drops email and attributes without a user ID. Empty email or attribute values are skipped. Identified users count towards your monthly tracked users. Formbricks fixes an attribute's type when it is first set: once an attribute holds a number, string values such as `"42"` are rejected. Make sure a variable always returns the same type.
 2. **Set language**: `setLanguage()` with an ISO code or an alias defined in Formbricks. Only relevant for multi-language surveys.
 3. **Set hidden fields**: `setEmbeddedData()`, see below.
 4. **Track action**: `track()` with the key of a code action defined in Formbricks (*Actions* > *Add action* > *Code*). Unknown keys are rejected with "Action with identifier '…' is unknown". New actions may take up to a minute to become available.
 
 ## Hidden fields
-Check *Set hidden fields* to pass values to [hidden fields](https://formbricks.com/docs/surveys/general-features/hidden-fields) via `formbricks.setEmbeddedData()`. Each call adds to or overwrites existing keys; an empty or undefined value removes the key. Use *Clear existing hidden fields first* to start with an empty set (`formbricks.clearEmbeddedData()`).
+Check *Set hidden fields* to pass values to [hidden fields](https://formbricks.com/docs/surveys/general-features/hidden-fields) via `formbricks.setEmbeddedData()`. Each call adds to or overwrites existing keys. An undefined value (for example a data layer key that is missing on the current page) is skipped and keeps the value set earlier; an empty string or `null` removes the key. Use *Clear existing hidden fields first* to start with an empty set (`formbricks.clearEmbeddedData()`).
 
 Keys must match `^[a-z][a-z0-9_]*$`, and a value only ends up in a response if the survey declares the key as hidden field. Values are kept in memory only, so they have to be set again after each page load.
 
 ## Self-hosted Formbricks
 The *App URL* field defaults to `https://app.formbricks.com`. When using a self-hosted instance, enter its base URL (e.g. `https://surveys.example.com`) and add `https://surveys.example.com/js/formbricks.umd.cjs` to the *Injects scripts* permission in the template editor. Otherwise the script will be blocked.
+
+## Troubleshooting
+If setup fails (for example because of a wrong workspace ID), Formbricks stays in an error state for 10 minutes and stores it in the browser. During that time, no tag sends anything, and there is no message in the console. Add `?formbricksDebug=true` to the page URL to see the Formbricks logs and to reset the error state; the tag works again on the next page load.
+
+The tag reports success to GTM as soon as the script is loaded, before Formbricks has finished its setup. Tags sequenced to fire after this tag cannot rely on Formbricks being ready.
