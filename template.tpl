@@ -117,7 +117,7 @@ ___TEMPLATE_PARAMETERS___
             "isUnique": false
           }
         ],
-        "help": "Attributes with empty values are skipped."
+        "help": "Attributes with empty values are skipped. Formbricks fixes the type of an attribute when it is first set, so keep values of one attribute either numbers or strings."
       }
     ],
     "enablingConditions": [
@@ -212,7 +212,7 @@ ___TEMPLATE_PARAMETERS___
         "type": "EQUALS"
       }
     ],
-    "help": "Keys must start with a lowercase letter, followed by lowercase letters, digits or underscores. An empty or undefined value removes the key."
+    "help": "Keys must start with a lowercase letter, followed by lowercase letters, digits or underscores. An empty value removes the key, an undefined value keeps the value set earlier."
   },
   {
     "type": "CHECKBOX",
@@ -246,6 +246,7 @@ ___SANDBOXED_JS_FOR_WEB_TEMPLATE___
 
 const injectScript = require('injectScript');
 const callInWindow = require('callInWindow');
+const copyFromWindow = require('copyFromWindow');
 const templateStorage = require('templateStorage');
 const makeString = require('makeString');
 const getType = require('getType');
@@ -292,10 +293,15 @@ const runMethods = () => {
     if (data.clearHiddenFields === true) callInWindow('formbricks.clearEmbeddedData');
     if (data.hiddenFields && data.hiddenFields.length > 0) {
       const fields = {};
+      let fieldCount = 0;
       data.hiddenFields.forEach(x => {
+        // undefined (e.g. a data layer key missing on this page) keeps an earlier value,
+        // an empty string or null removes the key
+        if (getType(x.fieldValue) === 'undefined') return;
         fields[makeString(x.fieldKey)] = toValue(x.fieldValue);
+        fieldCount++;
       });
-      callInWindow('formbricks.setEmbeddedData', fields);
+      if (fieldCount > 0) callInWindow('formbricks.setEmbeddedData', fields);
     }
   }
 
@@ -326,7 +332,20 @@ const onLoad = () => {
   data.gtmOnSuccess();
 };
 
-injectScript(appUrl + '/js/formbricks.umd.cjs', onLoad, data.gtmOnFailure, 'formbricks');
+const sdkLoadedElsewhere = templateStorage.getItem('sdkLoadedElsewhere') ||
+  (!templateStorage.getItem('setupDone') && getType(copyFromWindow('formbricks')) !== 'undefined');
+
+if (sdkLoadedElsewhere) {
+  // Formbricks was loaded outside this template (e.g. the official snippet). Loading it again
+  // would start a second SDK instance, and a second setup() emits no event to wait for. The
+  // queued methods run after the site's own setup() has finished.
+  templateStorage.setItem('sdkLoadedElsewhere', true);
+  templateStorage.setItem('setupDone', true);
+  runMethods();
+  data.gtmOnSuccess();
+} else {
+  injectScript(appUrl + '/js/formbricks.umd.cjs', onLoad, data.gtmOnFailure, 'formbricks');
+}
 
 
 ___WEB_PERMISSIONS___
@@ -370,6 +389,45 @@ ___WEB_PERMISSIONS___
           "value": {
             "type": 2,
             "listItem": [
+              {
+                "type": 3,
+                "mapKey": [
+                  {
+                    "type": 1,
+                    "string": "key"
+                  },
+                  {
+                    "type": 1,
+                    "string": "read"
+                  },
+                  {
+                    "type": 1,
+                    "string": "write"
+                  },
+                  {
+                    "type": 1,
+                    "string": "execute"
+                  }
+                ],
+                "mapValue": [
+                  {
+                    "type": 1,
+                    "string": "formbricks"
+                  },
+                  {
+                    "type": 8,
+                    "boolean": true
+                  },
+                  {
+                    "type": 8,
+                    "boolean": false
+                  },
+                  {
+                    "type": 8,
+                    "boolean": false
+                  }
+                ]
+              },
               {
                 "type": 3,
                 "mapKey": [
@@ -830,7 +888,204 @@ scenarios:
     runCode(mockData);
     assertApi('callInWindow').wasNotCalled();
     assertApi('gtmOnFailure').wasCalled();
+- name: self-hosted app url, trailing slash stripped
+  code: |-
+    mock('injectScript', (url, onSuccess) => {
+      assertThat(url).isEqualTo('https://surveys.example.com/js/formbricks.umd.cjs');
+      onSuccess();
+    });
+    mockData.appUrl = 'https://surveys.example.com/';
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setup.call', null, {
+      workspaceId: 'test-workspace', appUrl: 'https://surveys.example.com'
+    });
+- name: empty app url falls back to cloud
+  code: |-
+    mockData.appUrl = '';
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setup.call', null, {
+      workspaceId: 'test-workspace', appUrl: 'https://app.formbricks.com'
+    });
+- name: call order is user, language, hidden fields, track
+  code: |-
+    const calls = [];
+    mock('callInWindow', (name, a, b) => {
+      if (name === 'formbricks.on') { b(); return; }
+      if (name !== 'formbricks.setup.call') calls.push(name);
+    });
+    mockData.identifyUser = true; mockData.userId = 'u1'; mockData.userEmail = 'a@b.co';
+    mockData.userAttributes = [{attributeKey: 'plan', attributeValue: 'pro'}];
+    mockData.changeLanguage = true; mockData.language = 'de';
+    mockData.setHiddenFields = true; mockData.clearHiddenFields = true;
+    mockData.hiddenFields = [{fieldKey: 'plan', fieldValue: 'pro'}];
+    mockData.trackAction = true; mockData.actionName = 'checkout';
+    runCode(mockData);
+    assertThat(calls).isEqualTo([
+      'formbricks.setUserId.call', 'formbricks.setEmail.call', 'formbricks.setAttributes.call',
+      'formbricks.setLanguage.call', 'formbricks.clearEmbeddedData',
+      'formbricks.setEmbeddedData', 'formbricks.track.call'
+    ]);
+- name: two early fires each run their own methods once ready
+  code: |-
+    const listeners = [];
+    let setupCalls = 0;
+    mock('callInWindow', (name, a, b) => {
+      if (name === 'formbricks.on') listeners.push(b);
+      if (name === 'formbricks.setup.call') setupCalls++;
+    });
+    mockData.trackAction = true;
+    mockData.actionName = 'a1'; runCode(mockData);
+    mockData.actionName = 'a2'; runCode(mockData);
+    listeners.forEach(cb => cb());
+    assertThat(setupCalls).isEqualTo(1);
+    assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'a1');
+    assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'a2');
+- name: gtmOnSuccess fires before setup event
+  code: |-
+    runCode(mockData);
+    assertApi('gtmOnSuccess').wasCalled();
+    assertApi('callInWindow').wasNotCalledWith('formbricks.track.call', null, 'x');
+- name: undefined hidden field value is skipped, empty or null removes the key
+  code: |-
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
+    mockData.setHiddenFields = true;
+    mockData.hiddenFields = [
+      {fieldKey: 'plan', fieldValue: undefined},
+      {fieldKey: 'items', fieldValue: ''},
+      {fieldKey: 'page_type', fieldValue: null},
+      {fieldKey: 'user_tag', fieldValue: 'x'}
+    ];
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setEmbeddedData', {
+      items: null, page_type: null, user_tag: 'x'
+    });
+- name: all hidden field values undefined, setEmbeddedData not called
+  code: |-
+    let calls = 0;
+    mock('callInWindow', (n, a, b) => {
+      if (n === 'formbricks.on') b();
+      if (n === 'formbricks.setEmbeddedData') calls++;
+    });
+    mockData.setHiddenFields = true;
+    mockData.hiddenFields = [{fieldKey: 'plan', fieldValue: undefined}];
+    runCode(mockData);
+    assertThat(calls).isEqualTo(0);
+- name: SDK already on the page is reused, no second load or setup
+  code: |-
+    let injects = 0;
+    mock('injectScript', () => { injects++; });
+    mock('copyFromWindow', (key) => key === 'formbricks' ? {} : undefined);
+    const calls = [];
+    mock('callInWindow', (n) => { calls.push(n); });
+    mockData.trackAction = true;
+    mockData.actionName = 'checkout';
+    runCode(mockData);
+    assertThat(injects).isEqualTo(0);
+    assertThat(calls).isEqualTo(['formbricks.track.call']);
+    assertApi('gtmOnSuccess').wasCalled();
+- name: later tag after reusing an existing SDK runs methods directly
+  code: |-
+    let injects = 0;
+    mock('injectScript', () => { injects++; });
+    mock('copyFromWindow', (key) => key === 'formbricks' ? {} : undefined);
+    runCode(mockData);
+    mockData.trackAction = true;
+    mockData.actionName = 'checkout';
+    runCode(mockData);
+    assertThat(injects).isEqualTo(0);
+    assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'checkout');
+- name: SDK loaded by this template is not mistaken for an existing one
+  code: |-
+    // after the first tag, window.formbricks exists because the template injected it
+    let setupCalls = 0;
+    let loaded = false;
+    mock('injectScript', (url, onSuccess) => { loaded = true; onSuccess(); });
+    mock('copyFromWindow', (key) => loaded ? {} : undefined);
+    mock('callInWindow', (n, a, b) => {
+      if (n === 'formbricks.setup.call') setupCalls++;
+      if (n === 'formbricks.on') b();
+    });
+    runCode(mockData);
+    mockData.trackAction = true;
+    mockData.actionName = 'checkout';
+    runCode(mockData);
+    assertThat(setupCalls).isEqualTo(1);
+    assertApi('callInWindow').wasCalledWith('formbricks.track.call', null, 'checkout');
+- name: clear only, empty hidden field table
+  code: |-
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
+    mockData.setHiddenFields = true; mockData.clearHiddenFields = true; mockData.hiddenFields = [];
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.clearEmbeddedData');
+    assertApi('callInWindow').wasNotCalledWith('formbricks.setEmbeddedData', {});
+- name: options off means nothing is sent even with values present
+  code: |-
+    const calls = [];
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') { b(); return; } calls.push(n); });
+    mockData.userId = 'u1'; mockData.language = 'de'; mockData.actionName = 'x';
+    mockData.hiddenFields = [{fieldKey: 'plan', fieldValue: 'pro'}];
+    runCode(mockData);
+    assertThat(calls).isEqualTo(['formbricks.setup.call']);
+- name: attribute values keep their type
+  code: |-
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
+    mockData.identifyUser = true; mockData.userId = 'u1';
+    mockData.userAttributes = [
+      {attributeKey: 'n', attributeValue: 42},
+      {attributeKey: 'b', attributeValue: true},
+      {attributeKey: 's', attributeValue: 'x'}
+    ];
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setAttributes.call', null, {n: 42, b: true, s: 'x'});
+- name: all attributes empty, setAttributes not called
+  code: |-
+    let attrCalls = 0;
+    mock('callInWindow', (n, a, b) => {
+      if (n === 'formbricks.on') b();
+      if (n === 'formbricks.setAttributes.call') attrCalls++;
+    });
+    mockData.identifyUser = true; mockData.userId = 'u1';
+    mockData.userAttributes = [{attributeKey: 'a', attributeValue: ''}, {attributeKey: 'b', attributeValue: null}];
+    runCode(mockData);
+    assertThat(attrCalls).isEqualTo(0);
+- name: numeric user id is stringified
+  code: |-
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
+    mockData.identifyUser = true; mockData.userId = 123;
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setUserId.call', null, '123');
+- name: empty language and action at runtime are skipped
+  code: |-
+    const calls = [];
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') { b(); return; } calls.push(n); });
+    mockData.changeLanguage = true; mockData.language = undefined;
+    mockData.trackAction = true; mockData.actionName = '';
+    runCode(mockData);
+    assertThat(calls).isEqualTo(['formbricks.setup.call']);
+- name: object hidden field value is stringified
+  code: |-
+    mock('callInWindow', (n, a, b) => { if (n === 'formbricks.on') b(); });
+    mockData.setHiddenFields = true;
+    mockData.hiddenFields = [{fieldKey: 'items', fieldValue: ['a', 'b']}];
+    runCode(mockData);
+    assertApi('callInWindow').wasCalledWith('formbricks.setEmbeddedData', {items: 'a,b'});
+- name: second tag with a different workspace is ignored
+  code: |-
+    runCode(mockData);
+    mockData.workspaceId = 'other';
+    runCode(mockData);
+    assertApi('callInWindow').wasNotCalledWith('formbricks.setup.call', null, {
+      workspaceId: 'other', appUrl: 'https://app.formbricks.com'
+    });
 setup: |-
+  // GTM does not reset templateStorage between scenarios, so each test gets a fresh store
+  const store = {};
+  mockObject('templateStorage', {
+    getItem: (k) => store[k],
+    setItem: (k, v) => { store[k] = v; },
+    removeItem: (k) => { store[k] = undefined; },
+    clear: () => {}
+  });
   const mockData = {
     workspaceId: 'test-workspace',
     appUrl: 'https://app.formbricks.com/'
